@@ -784,6 +784,25 @@ p {
 }
 
 
+@media (min-width: 980px) {
+  /* PC: pool and roll button share a row, so the tray gets the height */
+  .roller {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    column-gap: 16px;
+    row-gap: 10px;
+  }
+  .roller > .dice-rail,
+  .roller > .roller-more,
+  .roller > .error {
+    grid-column: 1 / -1;
+  }
+  .roller > .roll-row {
+    justify-content: flex-end;
+    flex-wrap: nowrap;
+  }
+}
+
 .roller-more {
   display: flex;
   gap: 10px;

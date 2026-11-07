@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { NotationError, dieToken, parseNotation, toNotation } from "@/lib/dice/notation";
 import { type DiceGroup, type DieSpec, type RollRequest, MAX_DICE, RUNE_DIE, dieLabel, stdDie } from "@/lib/dice/types";
 import { DieIcon, Icon } from "./glyphs";
@@ -51,6 +51,18 @@ export function Roller({ customDice, onRoll, onManageCustom, busy, extra }: Roll
 
   const dec = (i: number) => setPool((p) => p.flatMap((g, j) => (j !== i ? [g] : g.count > 1 ? [{ ...g, count: g.count - 1 }] : [])));
 
+  /** Right click on a die button takes one of that die out of the pool. */
+  const remove = (die: DieSpec) => {
+    const i = pool.findIndex((g) => dieToken(g.die) === dieToken(die));
+    if (i >= 0) dec(i);
+  };
+
+  const clear = () => {
+    setPool([]);
+    setModifier(0);
+    setMode("normal");
+  };
+
   const countOf = (die: DieSpec) => pool.find((g) => dieToken(g.die) === dieToken(die))?.count ?? 0;
 
   const resolveCustom = (name: string) => customDice.find((d) => (d.name ?? "").toLowerCase() === name.toLowerCase());
@@ -76,15 +88,37 @@ export function Roller({ customDice, onRoll, onManageCustom, busy, extra }: Roll
     await onRoll(req);
   };
 
+  // keyboard shortcuts on the PC: R rolls, Esc empties the pool
+  const rollRef = useRef(roll);
+  rollRef.current = roll;
+  const clearRef = useRef(clear);
+  clearRef.current = clear;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey || e.repeat) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.closest("input, textarea, select, [contenteditable]") || t.closest(".dialog"))) return;
+      if (document.querySelector(".dialog")) return;
+      if (e.key === "r" || e.key === "R") {
+        e.preventDefault();
+        void rollRef.current();
+      } else if (e.key === "Escape") {
+        clearRef.current();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   return (
     <div className="panel roller">
       <div className="dice-rail" role="group" aria-label="Adicionar dados">
         {STANDARD.map((d) => (
-          <DieButton key={dieToken(d)} die={d} count={countOf(d)} onAdd={() => add(d)} />
+          <DieButton key={dieToken(d)} die={d} count={countOf(d)} onAdd={() => add(d)} onRemove={() => remove(d)} />
         ))}
-        <DieButton die={RUNE_DIE} count={countOf(RUNE_DIE)} onAdd={() => add(RUNE_DIE)} className="rune" />
+        <DieButton die={RUNE_DIE} count={countOf(RUNE_DIE)} onAdd={() => add(RUNE_DIE)} onRemove={() => remove(RUNE_DIE)} className="rune" />
         {customDice.map((d) => (
-          <DieButton key={d.id ?? dieToken(d)} die={d} count={countOf(d)} onAdd={() => add(d)} className="custom" />
+          <DieButton key={d.id ?? dieToken(d)} die={d} count={countOf(d)} onAdd={() => add(d)} onRemove={() => remove(d)} className="custom" />
         ))}
         {onManageCustom && (
           <button type="button" className="die-btn custom" onClick={onManageCustom} title="Criar ou editar dados personalizados">
@@ -149,7 +183,7 @@ export function Roller({ customDice, onRoll, onManageCustom, busy, extra }: Roll
             ))}
           </div>
         )}
-        <button type="button" className="btn btn-primary roll-btn" onClick={() => void roll()} disabled={busy}>
+        <button type="button" className="btn btn-primary roll-btn" onClick={() => void roll()} disabled={busy} title="Atalho: R">
           {busy ? "Rolando…" : "Rolar"}
         </button>
       </div>
@@ -165,15 +199,7 @@ export function Roller({ customDice, onRoll, onManageCustom, busy, extra }: Roll
           {typing ? "Usar botões" : "Digitar notação"}
         </button>
         {!typing && pool.length > 0 && (
-          <button
-            type="button"
-            className="btn btn-ghost btn-small"
-            onClick={() => {
-              setPool([]);
-              setModifier(0);
-              setMode("normal");
-            }}
-          >
+          <button type="button" className="btn btn-ghost btn-small" onClick={clear} title="Atalho: Esc">
             Limpar
           </button>
         )}
@@ -191,9 +217,31 @@ export function Roller({ customDice, onRoll, onManageCustom, busy, extra }: Roll
   );
 }
 
-function DieButton({ die, count, onAdd, className }: { die: DieSpec; count: number; onAdd: () => void; className?: string }) {
+function DieButton({
+  die,
+  count,
+  onAdd,
+  onRemove,
+  className,
+}: {
+  die: DieSpec;
+  count: number;
+  onAdd: () => void;
+  onRemove: () => void;
+  className?: string;
+}) {
   return (
-    <button type="button" className={`die-btn ${className ?? ""}`} onClick={onAdd} aria-label={`Adicionar ${dieLabel(die)}`}>
+    <button
+      type="button"
+      className={`die-btn ${className ?? ""}`}
+      onClick={onAdd}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        onRemove();
+      }}
+      aria-label={`Adicionar ${dieLabel(die)}`}
+      title={`${dieLabel(die)}: clique para pôr, botão direito para tirar`}
+    >
       <DieIcon die={die} />
       <span>{dieLabel(die)}</span>
       {count > 0 && <span className="count">{count}</span>}
