@@ -7,6 +7,7 @@
  *
  *   Auth:     password sign-in, refresh, /user, admin create/update user
  *   REST:     /rest/v1/rpc/<fn>, select / insert / upsert / update / delete with eq/is filters
+ *   Storage:  upload (multipart), signed URLs, remove — objects rows go through the real storage RLS
  *   Realtime: Phoenix protocol 2.0.0 (postgres_changes with RLS check, presence)
  *
  * Usage: DATABASE_URL=postgres://postgres@127.0.0.1:54322/runa_e2e node tests/e2e/fake-supabase.mjs
@@ -80,7 +81,7 @@ async function setupDatabase() {
         return null;
       end $$;
       do $$ declare t text; begin
-        foreach t in array array['rolls','mesa_members','custom_dice'] loop
+        foreach t in array array['rolls','mesa_members','custom_dice','mesa_som','mesa_combate','fichas'] loop
           execute format('drop trigger if exists _fake_rt on public.%I', t);
           execute format('create trigger _fake_rt after insert or update or delete on public.%I for each row execute function public._fake_realtime()', t);
         end loop;
@@ -114,7 +115,7 @@ async function asRole(claims, fn) {
 function send(res, status, body, headers = {}) {
   const h = {
     "access-control-allow-origin": "*",
-    "access-control-allow-headers": "authorization, apikey, content-type, x-client-info, prefer, accept, accept-profile, content-profile, range, x-supabase-api-version, x-region",
+    "access-control-allow-headers": "authorization, apikey, content-type, x-client-info, prefer, accept, accept-profile, content-profile, range, x-supabase-api-version, x-region, x-upsert, cache-control, x-metadata",
     "access-control-allow-methods": "GET, POST, PATCH, PUT, DELETE, OPTIONS",
     "access-control-expose-headers": "content-range, x-supabase-api-version",
     ...headers,
@@ -254,7 +255,21 @@ const ident = (s) => {
   if (!/^[a-z_][a-z0-9_]*$/i.test(s)) throw Object.assign(new Error(`bad identifier ${s}`), { code: "42601" });
   return `"${s}"`;
 };
-const TABLES = new Set(["profiles", "mesas", "mesa_members", "rolls", "custom_dice"]);
+const TABLES = new Set([
+  "profiles",
+  "mesas",
+  "mesa_members",
+  "rolls",
+  "custom_dice",
+  "fichas",
+  "musicas",
+  "playlists",
+  "playlist_musicas",
+  "mesa_som",
+  "mesa_combate",
+  "combatentes",
+  "mesa_notas",
+]);
 
 function whereFrom(url, params) {
   const parts = [];
@@ -271,6 +286,23 @@ function whereFrom(url, params) {
     }
   }
   return parts.length ? ` where ${parts.join(" and ")}` : "";
+}
+
+const ARG_TYPES = new Map();
+/** name -> type of each argument of public.<fn> (all overloads merged). */
+async function argTypes(fn) {
+  if (!ARG_TYPES.has(fn)) {
+    const { rows } = await admin.query(
+      `select p.proargnames as names, array(select format_type(t, null) from unnest(p.proargtypes::oid[]) t) as types
+         from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+        where n.nspname = 'public' and p.proname = $1`,
+      [fn],
+    );
+    const map = new Map();
+    for (const r of rows) (r.names ?? []).forEach((name, i) => r.types[i] && map.set(name, r.types[i]));
+    ARG_TYPES.set(fn, map);
+  }
+  return ARG_TYPES.get(fn);
 }
 
 function selectList(url) {
@@ -304,9 +336,13 @@ async function handleRest(req, res, url, sub) {
       const fn = sub.slice(5);
       const args = req.method === "POST" ? await readBody(req) : Object.fromEntries(url.searchParams);
       const names = Object.keys(args);
+      const types = await argTypes(fn);
       const params = names.map((n) => {
         const v = args[n];
-        return v === null || v === undefined ? null : typeof v === "object" ? JSON.stringify(v) : String(v);
+        if (v === null || v === undefined) return null;
+        // PostgREST hands arrays to array parameters as arrays and everything else as JSON.
+        if (Array.isArray(v) && types.get(n)?.endsWith("[]")) return v;
+        return typeof v === "object" ? JSON.stringify(v) : String(v);
       });
       const call = `public.${ident(fn)}(${names.map((n, i) => `${ident(n)} => $${i + 1}`).join(", ")})`;
       const out = await asRole(claims, (c) => c.query(`select to_jsonb(${call}) as result`, params));
@@ -389,6 +425,88 @@ async function handleRest(req, res, url, sub) {
   }
 }
 
+// ------------------------------------------------------------------ storage
+
+/** `${bucket}/${name}` -> { type, data }. The rows live in storage.objects, under its RLS. */
+const FILES = new Map();
+const storageError = (res, status, error, message) => send(res, status, { statusCode: String(status), error, message });
+
+async function readRaw(req) {
+  const chunks = [];
+  for await (const ch of req) chunks.push(ch);
+  return Buffer.concat(chunks);
+}
+
+async function handleStorage(req, res, url, sub) {
+  const signed = /^\/object\/sign\/([^/]+)\/(.+)$/.exec(sub);
+  if (signed && req.method === "GET") {
+    const key = `${signed[1]}/${decodeURIComponent(signed[2])}`;
+    const t = verify(url.searchParams.get("token"));
+    if (!t || t.url !== key) return storageError(res, 400, "InvalidJWT", "invalid signature");
+    const f = FILES.get(key);
+    if (!f) return storageError(res, 404, "not_found", "Object not found");
+    res.writeHead(200, { "content-type": f.type, "content-length": f.data.length, "access-control-allow-origin": "*" });
+    return res.end(f.data);
+  }
+  const claims = verify(bearer(req));
+  if (!claims) return storageError(res, 400, "Unauthorized", "Invalid JWT");
+  try {
+    if (signed && req.method === "POST") {
+      const [, bucket, raw] = signed;
+      const name = decodeURIComponent(raw);
+      const body = await readBody(req);
+      const out = await asRole(claims, (c) => c.query("select 1 from storage.objects where bucket_id = $1 and name = $2", [bucket, name]));
+      if (!out.rowCount || !FILES.has(`${bucket}/${name}`)) return storageError(res, 400, "not_found", "Object not found");
+      const token = sign({ url: `${bucket}/${name}`, exp: Math.floor(Date.now() / 1000) + Number(body.expiresIn ?? 60) });
+      return send(res, 200, { signedURL: `/object/sign/${bucket}/${name}?token=${token}` });
+    }
+    const object = /^\/object\/([^/]+)\/(.+)$/.exec(sub);
+    if (object && req.method === "POST") {
+      const [, bucket, raw] = object;
+      const name = decodeURIComponent(raw);
+      const b = await admin.query("select * from storage.buckets where id = $1", [bucket]);
+      if (!b.rowCount) return storageError(res, 400, "Bucket not found", "Bucket not found");
+      const ct = req.headers["content-type"] || "application/octet-stream";
+      let data = await readRaw(req);
+      let type = ct;
+      if (ct.startsWith("multipart/form-data")) {
+        const form = await new Request("http://local/", { method: "POST", headers: { "content-type": ct }, body: data }).formData();
+        for (const [, v] of form) {
+          if (typeof v !== "string") {
+            data = Buffer.from(await v.arrayBuffer());
+            type = v.type || "application/octet-stream";
+          }
+        }
+      }
+      const bucketRow = b.rows[0];
+      if (bucketRow.file_size_limit && data.length > Number(bucketRow.file_size_limit))
+        return storageError(res, 413, "Payload too large", "The object exceeded the maximum allowed size");
+      if (bucketRow.allowed_mime_types?.length && !bucketRow.allowed_mime_types.includes(type))
+        return storageError(res, 415, "invalid_mime_type", `mime type ${type} is not supported`);
+      try {
+        const out = await asRole(claims, (c) => c.query("insert into storage.objects (bucket_id, name) values ($1, $2) returning id", [bucket, name]));
+        FILES.set(`${bucket}/${name}`, { type, data });
+        return send(res, 200, { Id: out.rows[0].id, Key: `${bucket}/${name}` });
+      } catch (e) {
+        if (e.code === "42501") return storageError(res, 403, "Unauthorized", "new row violates row-level security policy");
+        throw e;
+      }
+    }
+    const removeAll = /^\/object\/([^/]+)$/.exec(sub);
+    if (removeAll && req.method === "DELETE") {
+      const bucket = removeAll[1];
+      const body = await readBody(req);
+      const names = Array.isArray(body.prefixes) ? body.prefixes.map(String) : [];
+      const out = await asRole(claims, (c) => c.query("delete from storage.objects where bucket_id = $1 and name = any($2) returning name, bucket_id", [bucket, names]));
+      for (const r of out.rows) FILES.delete(`${bucket}/${r.name}`);
+      return send(res, 200, out.rows);
+    }
+    return storageError(res, 404, "not_found", `not implemented: ${req.method} /storage/v1${sub}`);
+  } catch (e) {
+    return storageError(res, 400, e.code || "error", e.message);
+  }
+}
+
 // ------------------------------------------------------------------ realtime
 
 /** topic -> Set<Sub>; Sub = { ws, joinRef, bindings, key, claims, meta, presenceEnabled } */
@@ -426,10 +544,27 @@ function leave(topic, sub) {
   if (sub.meta) broadcastDiff(topic, {}, { [sub.key]: { metas: [sub.meta] } });
 }
 
+const PKS = new Map();
+async function primaryKey(table) {
+  if (!PKS.has(table)) {
+    const { rows } = await admin.query(
+      `select a.attname as name from pg_index i
+         join pg_attribute a on a.attrelid = i.indrelid and a.attnum = any(i.indkey)
+        where i.indrelid = format('public.%I', $1::text)::regclass and i.indisprimary`,
+      [table],
+    );
+    PKS.set(table, rows.map((r) => r.name));
+  }
+  return PKS.get(table);
+}
+
+/** Like Supabase Realtime: a change only reaches subscribers whose RLS lets them see the row. */
 async function visible(sub, table, record) {
-  if (!record?.id) return true;
+  const pk = await primaryKey(table);
+  if (!record || !pk.length || pk.some((k) => record[k] == null)) return false;
   try {
-    const out = await asRole(sub.claims ?? { role: "anon" }, (c) => c.query(`select 1 from public.${ident(table)} where id = $1`, [record.id]));
+    const where = pk.map((k, i) => `${ident(k)} = $${i + 1}`).join(" and ");
+    const out = await asRole(sub.claims ?? { role: "anon" }, (c) => c.query(`select 1 from public.${ident(table)} where ${where}`, pk.map((k) => record[k])));
     return out.rowCount > 0;
   } catch {
     return false;
@@ -452,6 +587,8 @@ async function onChange(payload) {
   const { table, type } = payload;
   const record = payload.record ?? payload.old;
   const columns = await columnsOf(table);
+  const pk = await primaryKey(table);
+  const oldKeys = payload.old ? Object.fromEntries(pk.map((k) => [k, payload.old[k]])) : undefined;
   for (const [topic, subs] of topics) {
     for (const sub of subs) {
       const ids = sub.bindings.filter((b) => matches(b, table, type, record)).map((b) => b.id);
@@ -470,7 +607,7 @@ async function onChange(payload) {
             commit_timestamp: new Date().toISOString(),
             type,
             record: payload.record ?? undefined,
-            old_record: payload.old ? { id: payload.old.id } : undefined,
+            old_record: oldKeys,
             columns,
             errors: null,
           },
@@ -557,12 +694,16 @@ await setupDatabase();
 const listener = new pg.Client({ connectionString: DB });
 await listener.connect();
 await listener.query("listen fake_realtime");
+// one change at a time, in commit order, like Supabase Realtime
+let queue = Promise.resolve();
 listener.on("notification", (n) => {
+  let payload;
   try {
-    void onChange(JSON.parse(n.payload));
+    payload = JSON.parse(n.payload);
   } catch (e) {
-    console.error("realtime", e);
+    return console.error("realtime", e);
   }
+  queue = queue.then(() => onChange(payload)).catch((e) => console.error("realtime", e));
 });
 
 const server = http.createServer(async (req, res) => {
@@ -571,6 +712,7 @@ const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
     if (url.pathname.startsWith("/auth/v1")) return await handleAuth(req, res, url, url.pathname.slice(8));
     if (url.pathname.startsWith("/rest/v1")) return await handleRest(req, res, url, url.pathname.slice(8));
+    if (url.pathname.startsWith("/storage/v1")) return await handleStorage(req, res, url, url.pathname.slice(11));
     return send(res, 404, { message: "not found" });
   } catch (e) {
     console.error(e);

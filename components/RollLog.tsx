@@ -87,6 +87,7 @@ export function RollLog({
   title = "Histórico",
   actions,
   emptyText = "As rolagens aparecem aqui.",
+  bare,
 }: {
   records: RollRecord[];
   showWho?: boolean;
@@ -95,7 +96,19 @@ export function RollLog({
   title?: string;
   actions?: React.ReactNode;
   emptyText?: string;
+  /** Without the panel frame and title (inside the table's side panel). */
+  bare?: boolean;
 }) {
+  if (bare)
+    return records.length ? (
+      <ul className="log-list bare" aria-label={title}>
+        {records.map((r) => (
+          <RollEntry key={r.id} record={r} showWho={showWho} rune={runeOf?.(r)} onRepeat={onRepeat} />
+        ))}
+      </ul>
+    ) : (
+      <p className="log-empty">{emptyText}</p>
+    );
   return (
     <section className="panel log" aria-label={title}>
       <div className="log-head">

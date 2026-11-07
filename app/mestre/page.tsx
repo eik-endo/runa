@@ -24,7 +24,7 @@ function MestreArea() {
   const { profile } = useAuth();
   const [mesas, setMesas] = useState<MesaSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [form, setForm] = useState<MesaFormValue>({ name: "", system: "D&D 5.5", description: "", runeSystem: false });
+  const [form, setForm] = useState<MesaFormValue>({ name: "", system: "D&D 5.5", description: "", runeSystem: false, visibility: "privada" });
   const [creating, setCreating] = useState(false);
   const [quickName, setQuickName] = useState("");
 
@@ -45,7 +45,14 @@ function MestreArea() {
     setError(null);
     setCreating(true);
     try {
-      const m = await createMesa({ name: form.name, kind: "campanha", system: form.system, description: form.description, runeSystem: form.runeSystem });
+      const m = await createMesa({
+        name: form.name,
+        kind: "campanha",
+        system: form.system,
+        description: form.description,
+        runeSystem: form.runeSystem,
+        visibility: form.visibility,
+      });
       router.push(`/mestre/${m.id}?nova=1`);
     } catch (err) {
       setError(errorMessage(err));
@@ -91,7 +98,10 @@ function MestreArea() {
                       {m.kind === "avulsa" ? "Mesa avulsa" : m.system} · {m.members - 1} {m.members - 1 === 1 ? "jogador" : "jogadores"} · {when(m.last_roll_at)}
                     </div>
                   </div>
-                  {m.rune_system && <span className="badge amber">Runas</span>}
+                  <div className="row" style={{ gap: 4, flexWrap: "nowrap" }}>
+                    {m.rune_system && <span className="badge amber">Runas</span>}
+                    <span className={`badge${m.visibility === "publica" ? " moss" : ""}`}>{m.visibility === "publica" ? "Pública" : "Privada"}</span>
+                  </div>
                 </div>
                 <div className="camp-actions">
                   <CodeBox code={m.code} name={m.name} />
@@ -107,6 +117,18 @@ function MestreArea() {
             ))}
           </ul>
         )}
+      </section>
+
+      <section className="panel section music-cta" aria-labelledby="musicas-titulo">
+        <div className="section-head">
+          <div>
+            <h2 id="musicas-titulo">Músicas</h2>
+            <p className="hint">Guarde trilhas do YouTube ou de arquivos de áudio, monte playlists por clima de cena e toque para a mesa inteira.</p>
+          </div>
+          <Link className="btn" href="/mestre/musicas">
+            Abrir músicas
+          </Link>
+        </div>
       </section>
 
       <div className="grid-2">

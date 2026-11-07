@@ -24,6 +24,9 @@ export function SiteHeader() {
         <Link href="/" aria-current={current("/")}>
           Rolar
         </Link>
+        <Link href="/mesas" aria-current={current("/mesas")}>
+          Mesas
+        </Link>
         <Link href="/mestre" aria-current={current("/mestre")}>
           Mestre
         </Link>

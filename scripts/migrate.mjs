@@ -54,6 +54,7 @@ function clientFor(raw) {
 let client = null;
 for (const raw of candidates) {
   const c = clientFor(raw);
+  c.on("notice", (n) => log(`aviso do banco: ${n.message}`));
   try {
     await c.connect();
     client = c;

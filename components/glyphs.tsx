@@ -67,7 +67,33 @@ export function DieIcon({ die, size = 30 }: { die: DieSpec | "custom"; size?: nu
   );
 }
 
-export function Icon({ name, size = 20 }: { name: "sound" | "mute" | "trash" | "x" | "copy" | "repeat" | "plus" | "gear" | "lock" | "share"; size?: number }) {
+export type IconName =
+  | "sound"
+  | "mute"
+  | "trash"
+  | "x"
+  | "copy"
+  | "repeat"
+  | "plus"
+  | "gear"
+  | "lock"
+  | "share"
+  | "play"
+  | "pause"
+  | "next"
+  | "prev"
+  | "stop"
+  | "music"
+  | "shuffle"
+  | "grip"
+  | "up"
+  | "down"
+  | "search"
+  | "eye"
+  | "eyeOff"
+  | "edit";
+
+export function Icon({ name, size = 20 }: { name: IconName; size?: number }) {
   const paths: Record<string, React.ReactNode> = {
     sound: <path d="M4 9v6h4l5 4V5L8 9H4Zm12.5-.5a5 5 0 0 1 0 7M18.9 6a8.5 8.5 0 0 1 0 12" />,
     mute: <path d="M4 9v6h4l5 4V5L8 9H4Zm12 .5 5 5m0-5-5 5" />,
@@ -84,6 +110,25 @@ export function Icon({ name, size = 20 }: { name: "sound" | "mute" | "trash" | "
     ),
     lock: <path d="M6 11h12v9H6zm2.5 0V8a3.5 3.5 0 0 1 7 0v3" />,
     share: <path d="M12 3v12M7.5 7.5 12 3l4.5 4.5M5 13v7h14v-7" />,
+    play: <path d="M8 5.5v13l10.5-6.5Z" fill="currentColor" />,
+    pause: <path d="M8 5.5v13M16 5.5v13" strokeWidth="3" />,
+    next: <path d="M6 6l9 6-9 6Zm12 0v12" fill="currentColor" />,
+    prev: <path d="M18 6l-9 6 9 6ZM6 6v12" fill="currentColor" />,
+    stop: <rect x="6.5" y="6.5" width="11" height="11" rx="1.5" fill="currentColor" />,
+    music: <path d="M9 18V5.5l11-2V16M9 18a3 3 0 1 1-6 0 3 3 0 0 1 6 0Zm11-2a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />,
+    shuffle: <path d="M3 7h3.5c4 0 6 10 10 10H21m0 0-3-3m3 3-3 3M3 17h3.5c1.6 0 2.8-1.5 3.8-3.4M21 7h-4.5c-1.6 0-2.8 1.5-3.8 3.4M21 7l-3-3m3 3-3 3" />,
+    grip: <path d="M9 6h.01M9 12h.01M9 18h.01M15 6h.01M15 12h.01M15 18h.01" strokeWidth="3" />,
+    up: <path d="M6 15l6-6 6 6" />,
+    down: <path d="M6 9l6 6 6-6" />,
+    search: <path d="M10.5 18a7.5 7.5 0 1 1 0-15 7.5 7.5 0 0 1 0 15Zm5.3-2.2L21 21" />,
+    eye: (
+      <>
+        <path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z" />
+        <circle cx="12" cy="12" r="3" />
+      </>
+    ),
+    eyeOff: <path d="M3 3l18 18M10.6 5.6A9.7 9.7 0 0 1 12 5.5c6 0 9.5 6.5 9.5 6.5a17 17 0 0 1-3.2 4M6.4 6.5C3.9 8.1 2.5 12 2.5 12s3.5 6.5 9.5 6.5a9.3 9.3 0 0 0 4.4-1.1M9.9 9.9a3 3 0 0 0 4.2 4.2" />,
+    edit: <path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16Zm9.5-13.5 4 4" />,
   };
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">

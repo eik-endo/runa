@@ -38,7 +38,7 @@ function Manage({ id }: { id: string }) {
     try {
       const s = await mesaState(id);
       setState(s);
-      setForm((f) => f ?? { name: s.mesa.name, system: s.mesa.system, description: s.mesa.description, runeSystem: s.mesa.rune_system });
+      setForm((f) => f ?? { name: s.mesa.name, system: s.mesa.system, description: s.mesa.description, runeSystem: s.mesa.rune_system, visibility: s.mesa.visibility ?? "privada" });
       setDice((await listCustomDice()).filter((d) => d.mesa_id === id));
     } catch (e) {
       setError(errorMessage(e));
@@ -75,7 +75,13 @@ function Manage({ id }: { id: string }) {
     e.preventDefault();
     setSaving(true);
     try {
-      await updateMesa(id, { name: form.name.trim() || state.mesa.name, system: form.system.trim() || "Outro", description: form.description, rune_system: form.runeSystem });
+      await updateMesa(id, {
+        name: form.name.trim() || state.mesa.name,
+        system: form.system.trim() || "Outro",
+        description: form.description,
+        rune_system: form.runeSystem,
+        visibility: form.visibility,
+      });
       toast("Campanha salva.");
       await load();
     } catch (err) {

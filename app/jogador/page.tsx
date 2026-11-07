@@ -9,6 +9,7 @@ import { CustomDiceDialog } from "@/components/CustomDiceDialog";
 import { RuneGlyph } from "@/components/glyphs";
 import { RequireAccount } from "@/components/OnlineGate";
 import { ColorPicker } from "@/components/pickers";
+import { SheetList } from "@/components/sheet/SheetList";
 import { toast } from "@/components/Toaster";
 import {
   type MesaSummary,
@@ -250,6 +251,8 @@ function JogadorArea() {
         )}
       </section>
 
+      {profile && <SheetList ownerId={profile.id} />}
+
       <section className="panel section" aria-labelledby="meus-dados">
         <div className="section-head">
           <h2 id="meus-dados">Seus dados personalizados</h2>
@@ -315,7 +318,7 @@ export default function JogadorPage() {
     <div className="page">
       <div className="page-head">
         <h1>Área do Jogador</h1>
-        <p>Entre nas mesas pelo código, cuide do seu personagem em cada campanha e guarde seus dados personalizados.</p>
+        <p>Entre nas mesas pelo código, cuide das suas fichas e do seu personagem em cada campanha e guarde seus dados personalizados.</p>
       </div>
       <RequireAccount next="/jogador">
         <JogadorArea />

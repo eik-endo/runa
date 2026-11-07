@@ -7,24 +7,37 @@ import {
   type PresenceUser,
   type Profile,
   type SavedDie,
+  controlSound,
   createCustomDie,
   deleteCustomDie,
   errorMessage,
+  getFicha,
   joinMesa,
   listCustomDice,
+  measureClockSkew,
+  mesaSound,
   mesaState,
   recentRolls,
   rollAtMesa,
   subscribeMesa,
   updateMyMember,
 } from "@/lib/api";
+import { NotationError, parseNotation, toNotation } from "@/lib/dice/notation";
 import type { RollRecord, RollRequest } from "@/lib/dice/types";
+import { type Canal, type SomControl, type SomState, newerSound } from "@/lib/music";
+import { initiativeBonus, normalizeDnd } from "@/lib/sheet";
+import { useLocalState } from "@/lib/use-local";
 import { useAuth } from "./AuthProvider";
 import { CharacterDialog } from "./CharacterDialog";
 import { CodeBox } from "./CodeBox";
 import { CustomDiceDialog } from "./CustomDiceDialog";
 import { type TrayHandle, DiceTrayView } from "./DiceTrayView";
 import { Icon } from "./glyphs";
+import { Initiative } from "./Initiative";
+import { MasterNotes } from "./MasterNotes";
+import { MesaSheetTab } from "./MesaSheetTab";
+import { MusicDock } from "./music/MusicDock";
+import { MusicManager } from "./music/MusicManager";
 import { OfflineNotice } from "./OnlineGate";
 import { RollLog } from "./RollLog";
 import { Roller } from "./Roller";
@@ -87,6 +100,16 @@ function sortRolls(list: RollRecord[]) {
   return [...list].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, MAX_LOG);
 }
 
+type SideTab = "rolagens" | "ficha" | "iniciativa" | "musica" | "notas";
+
+const TAB_LABEL: Record<SideTab, string> = {
+  rolagens: "Rolagens",
+  ficha: "Ficha",
+  iniciativa: "Iniciativa",
+  musica: "Música",
+  notas: "Notas",
+};
+
 function Mesa({ code, me }: { code: string; me: Profile }) {
   const tray = useRef<TrayHandle>(null);
   const [state, setState] = useState<MesaState | null>(null);
@@ -99,9 +122,20 @@ function Mesa({ code, me }: { code: string; me: Profile }) {
   const [busy, setBusy] = useState(false);
   const [showChar, setShowChar] = useState(false);
   const [showDice, setShowDice] = useState(false);
+  const [savedTab, setTab] = useLocalState<SideTab>("runa:mesa-aba", "rolagens");
+  const [sound, setSound] = useState<Partial<Record<Canal, SomState | null>>>({});
+  const [skew, setSkew] = useState(0);
+  const [combatVersion, setCombatVersion] = useState(0);
+  const [unseen, setUnseen] = useState(0);
+  const [initBonus, setInitBonus] = useState<number | null>(null);
   const seen = useRef(new Set<string>());
   const presence = useRef<{ updatePresence(p: PresenceUser): void } | null>(null);
   const mesaId = state?.mesa.id;
+  const isMaster = state?.role === "mestre";
+  const tabs: SideTab[] = isMaster ? ["rolagens", "ficha", "iniciativa", "musica", "notas"] : ["rolagens", "ficha", "iniciativa"];
+  const tab: SideTab = tabs.includes(savedTab) ? savedTab : "rolagens";
+  const tabRef = useRef(tab);
+  tabRef.current = tab;
 
   const addRoll = useCallback((r: RollRecord) => setRolls((list) => (list.some((x) => x.id === r.id) ? list : sortRolls([r, ...list]))), []);
 
@@ -113,13 +147,16 @@ function Mesa({ code, me }: { code: string; me: Profile }) {
     }
   }, []);
 
-  const reloadDice = useCallback(async (id: string) => {
-    try {
-      setDice((await listCustomDice()).filter((d) => d.mesa_id === id || (d.mesa_id === null && d.owner_id === me.id)));
-    } catch {
-      /* keep the dice we have */
-    }
-  }, [me.id]);
+  const reloadDice = useCallback(
+    async (id: string) => {
+      try {
+        setDice((await listCustomDice()).filter((d) => d.mesa_id === id || (d.mesa_id === null && d.owner_id === me.id)));
+      } catch {
+        /* keep the dice we have */
+      }
+    },
+    [me.id],
+  );
 
   // join by code, then load everything
   useEffect(() => {
@@ -128,12 +165,20 @@ function Mesa({ code, me }: { code: string; me: Profile }) {
       try {
         const { mesa } = await joinMesa(code);
         if (!alive) return;
-        const [st, rs] = await Promise.all([mesaState(mesa.id), recentRolls(mesa.id)]);
+        const [st, rs, som] = await Promise.all([mesaState(mesa.id), recentRolls(mesa.id), mesaSound(mesa.id).catch(() => [] as SomState[])]);
         if (!alive) return;
         rs.forEach((r) => seen.current.add(r.id));
         setState(st);
         setRolls(rs);
+        setSound((prev) => {
+          const next = { ...prev };
+          for (const x of som) next[x.canal] = newerSound(prev[x.canal], x);
+          return next;
+        });
         void reloadDice(mesa.id);
+        measureClockSkew()
+          .then((ms) => alive && setSkew(ms))
+          .catch(() => {});
       } catch (e) {
         if (alive) setError(errorMessage(e));
       }
@@ -146,6 +191,22 @@ function Mesa({ code, me }: { code: string; me: Profile }) {
   const myMember = state?.members.find((m) => m.user_id === me.id);
   const myName = myMember?.character_name || me.display_name;
   const myColor = myMember?.color || me.dice_color;
+  const myFichaId = myMember?.ficha_id ?? null;
+
+  // initiative bonus from the linked sheet
+  useEffect(() => {
+    let alive = true;
+    if (!myFichaId) {
+      setInitBonus(null);
+      return;
+    }
+    getFicha(myFichaId)
+      .then((f) => alive && setInitBonus(f && f.system === "dnd5e" ? initiativeBonus(normalizeDnd(f.data)) : null))
+      .catch(() => alive && setInitBonus(null));
+    return () => {
+      alive = false;
+    };
+  }, [myFichaId, combatVersion]);
 
   // live updates
   useEffect(() => {
@@ -158,6 +219,7 @@ function Mesa({ code, me }: { code: string; me: Profile }) {
         onRoll(record) {
           if (seen.current.has(record.id)) return;
           seen.current.add(record.id);
+          if (tabRef.current !== "rolagens") setUnseen((n) => n + 1);
           if (document.hidden) addRoll(record);
           else void tray.current?.play(record).then(() => addRoll(record));
         },
@@ -167,6 +229,12 @@ function Mesa({ code, me }: { code: string; me: Profile }) {
         },
         onDiceChanged() {
           void reloadDice(mesaId);
+        },
+        onSound(s) {
+          setSound((prev) => ({ ...prev, [s.canal]: newerSound(prev[s.canal], s) }));
+        },
+        onCombatChanged() {
+          setCombatVersion((v) => v + 1);
         },
         onPresence: setOnline,
         onStatus: setLive,
@@ -186,30 +254,61 @@ function Mesa({ code, me }: { code: string; me: Profile }) {
     presence.current?.updatePresence({ user_id: me.id, name: myName, color: myColor });
   }, [me.id, myName, myColor]);
 
+  useEffect(() => {
+    if (tab === "rolagens") setUnseen(0);
+  }, [tab]);
+
   const roll = useCallback(
-    async (req: RollRequest) => {
-      if (!mesaId) return;
+    async (req: RollRequest, secretOverride?: boolean): Promise<RollRecord | null> => {
+      if (!mesaId) return null;
       tray.current?.unlockAudio();
       setBusy(true);
       let record: RollRecord;
       try {
-        record = await rollAtMesa(mesaId, req, secret);
+        record = await rollAtMesa(mesaId, req, secretOverride ?? secret);
       } catch (e) {
         toast(errorMessage(e));
         setBusy(false);
-        return;
+        return null;
       }
       setBusy(false);
       seen.current.add(record.id);
       await tray.current?.play(record);
       addRoll(record);
+      return record;
     },
     [mesaId, secret, addRoll],
+  );
+
+  const rollNotation = useCallback(
+    async (notation: string, label: string, secretOverride?: boolean): Promise<RollRecord | null> => {
+      try {
+        const p = parseNotation(notation);
+        return await roll({ groups: p.groups, modifier: p.modifier, notation: toNotation(p.groups, p.modifier), label }, secretOverride);
+      } catch (e) {
+        toast(e instanceof NotationError ? e.message : "Não deu para rolar isso.");
+        return null;
+      }
+    },
+    [roll],
   );
 
   const repeat = useCallback(
     (r: RollRecord) => void roll({ groups: r.groups.map(({ values: _v, ...g }) => g), modifier: r.modifier, notation: r.notation, label: r.label ?? undefined }),
     [roll],
+  );
+
+  const control = useCallback<SomControl>(
+    async (canal, acao, dados) => {
+      if (!mesaId) return;
+      try {
+        const s = await controlSound(mesaId, canal, acao, dados ?? {});
+        setSound((prev) => ({ ...prev, [canal]: newerSound(prev[canal], s) }));
+      } catch (e) {
+        toast(errorMessage(e));
+      }
+    },
+    [mesaId],
   );
 
   const onlineIds = useMemo(() => new Set(online.map((u) => u.user_id)), [online]);
@@ -220,77 +319,115 @@ function Mesa({ code, me }: { code: string; me: Profile }) {
       <div className="page page-narrow">
         <div className="empty">
           <span>{error}</span>
-          <Link className="btn" href="/jogador">
-            Digitar outro código
+          <Link className="btn" href="/mesas">
+            Procurar outra mesa
           </Link>
         </div>
       </div>
     );
   if (!state) return <p className="loading">Entrando na mesa…</p>;
 
-  const isMaster = state.role === "mestre";
   const masterName = state.members.find((m) => m.role === "mestre")?.display_name;
+  const split = tab === "ficha";
 
   return (
-    <div className="table-layout">
-      <div className="table-main">
-        <DiceTrayView ref={tray} showWho emptyHint="Quando alguém rolar, os dados caem aqui para todo mundo ver." />
-        <Roller
-          customDice={customSpecs}
-          onRoll={roll}
-          busy={busy}
-          onManageCustom={() => setShowDice(true)}
-          extra={
-            <label className="check" title={isMaster ? "Só você vê" : "Só você e o mestre veem"}>
-              <input type="checkbox" checked={secret} onChange={(e) => setSecret(e.target.checked)} />
-              <Icon name="lock" size={16} />
-              {isMaster ? "Escondida dos jogadores" : "Secreta (só o mestre vê)"}
-            </label>
-          }
-        />
-      </div>
-      <aside className="table-side">
-        <div className="panel mesa-panel">
-          <div className="mesa-panel-top">
-            <div style={{ minWidth: 0 }}>
-              <div className="mesa-name">{state.mesa.name}</div>
-              <div className="hint">
-                {isMaster ? "Você é o mestre" : `Mestre: ${masterName ?? "—"}`} ·{" "}
-                <span style={{ color: live === "online" ? "var(--moss)" : "var(--amber)" }}>
-                  {live === "online" ? "ao vivo" : live === "connecting" ? "conectando…" : "reconectando…"}
-                </span>
-              </div>
-            </div>
-            <CodeBox code={state.mesa.code} name={state.mesa.name} compact />
+    <div className="mesa-page">
+      <header className="panel mesa-bar">
+        <div className="mesa-id">
+          <div className="mesa-name">
+            {state.mesa.name}
+            <span className={`badge${state.mesa.visibility === "publica" ? " moss" : ""}`}>{state.mesa.visibility === "publica" ? "Pública" : "Privada"}</span>
           </div>
-          <div className="mesa-panel-bottom">
-            <div className="presence" aria-label="Quem está na mesa">
-              {state.members.map((m) => {
-                const on = onlineIds.has(m.user_id);
-                return (
-                  <span key={m.user_id} className={`member-chip${on ? " on" : ""}`} title={on ? "Na mesa agora" : "Fora da mesa"}>
-                    <span className="dot" style={{ background: m.color }} />
-                    {m.character_name || m.display_name}
-                    {m.role === "mestre" && <span className="sr-only"> (mestre)</span>}
-                    {m.role === "mestre" && <span className="crown" aria-hidden="true">mestre</span>}
-                  </span>
-                );
-              })}
-            </div>
-            <div className="row" style={{ gap: 6 }}>
-              <button type="button" className="btn btn-small" onClick={() => setShowChar(true)}>
-                {isMaster ? "Minha cor" : "Meu personagem"}
-              </button>
-              {isMaster && (
-                <Link className="btn btn-small" href={`/mestre/${state.mesa.id}`}>
-                  Gerenciar
-                </Link>
-              )}
-            </div>
+          <div className="hint">
+            {isMaster ? "Você é o mestre" : `Mestre: ${masterName ?? "—"}`} ·{" "}
+            <span style={{ color: live === "online" ? "var(--moss)" : "var(--amber)" }}>
+              {live === "online" ? "ao vivo" : live === "connecting" ? "conectando…" : "reconectando…"}
+            </span>
           </div>
         </div>
-        <RollLog records={rolls} showWho onRepeat={repeat} emptyText="Ninguém rolou ainda nesta mesa." />
-      </aside>
+        <div className="presence" aria-label="Quem está na mesa">
+          {state.members.map((m) => {
+            const on = onlineIds.has(m.user_id);
+            return (
+              <span key={m.user_id} className={`member-chip${on ? " on" : ""}`} title={on ? "Na mesa agora" : "Fora da mesa"}>
+                <span className="dot" style={{ background: m.color }} />
+                {m.character_name || m.display_name}
+                {m.role === "mestre" && <span className="sr-only"> (mestre)</span>}
+                {m.role === "mestre" && (
+                  <span className="crown" aria-hidden="true">
+                    mestre
+                  </span>
+                )}
+              </span>
+            );
+          })}
+        </div>
+        <span className="spacer" />
+        <CodeBox code={state.mesa.code} name={state.mesa.name} compact />
+        <button type="button" className="btn btn-small" onClick={() => setShowChar(true)}>
+          {isMaster ? "Minha cor" : "Meu personagem"}
+        </button>
+        {isMaster && (
+          <Link className="btn btn-small" href={`/mestre/${state.mesa.id}`}>
+            Gerenciar
+          </Link>
+        )}
+      </header>
+
+      <div className={`mesa-body${split ? " split" : ""}`}>
+        <div className="table-main">
+          <DiceTrayView ref={tray} showWho emptyHint="Quando alguém rolar, os dados caem aqui para todo mundo ver." />
+          <Roller
+            customDice={customSpecs}
+            onRoll={(req) => void roll(req)}
+            busy={busy}
+            onManageCustom={() => setShowDice(true)}
+            extra={
+              <label className="check" title={isMaster ? "Só você vê" : "Só você e o mestre veem"}>
+                <input type="checkbox" checked={secret} onChange={(e) => setSecret(e.target.checked)} />
+                <Icon name="lock" size={16} />
+                {isMaster ? "Escondida dos jogadores" : "Secreta (só o mestre vê)"}
+              </label>
+            }
+          />
+        </div>
+
+        <aside className="panel side">
+          <div className="side-tabs" role="tablist" aria-label="Painel da mesa">
+            {tabs.map((t) => (
+              <button key={t} type="button" role="tab" aria-selected={tab === t} onClick={() => setTab(t)}>
+                {TAB_LABEL[t]}
+                {t === "rolagens" && unseen > 0 && <span className="count">{unseen > 9 ? "9+" : unseen}</span>}
+              </button>
+            ))}
+          </div>
+          <div className="side-content">
+            <div hidden={tab !== "rolagens"}>
+              <RollLog records={rolls} showWho onRepeat={repeat} emptyText="Ninguém rolou ainda nesta mesa." bare />
+            </div>
+            <div hidden={tab !== "ficha"}>
+              <MesaSheetTab
+                mesaId={state.mesa.id}
+                me={me}
+                master={isMaster}
+                members={state.members}
+                onRoll={(n, l) => void rollNotation(n, l)}
+                onLinked={() => void reloadState(state.mesa.id)}
+              />
+            </div>
+            <div hidden={tab !== "iniciativa"}>
+              <Initiative mesaId={state.mesa.id} meId={me.id} master={isMaster} version={combatVersion} initBonus={initBonus} rollD20={rollNotation} />
+            </div>
+            {isMaster && (
+              <div hidden={tab !== "musica"}>
+                <MusicManager ownerId={me.id} control={control} playing={sound} />
+              </div>
+            )}
+            {isMaster && tab === "notas" && <MasterNotes mesaId={state.mesa.id} />}
+          </div>
+          <MusicDock states={sound} skewMs={skew} master={isMaster} control={isMaster ? control : undefined} />
+        </aside>
+      </div>
 
       {showChar && myMember && (
         <CharacterDialog
