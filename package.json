@@ -1,0 +1,40 @@
+{
+  "name": "runa-dados",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Runa — mesa de dados de RPG com física 3D, mesas online e áreas de mestre e jogador.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "node scripts/migrate.mjs && next build",
+    "build:app": "next build",
+    "start": "next start",
+    "db:migrate": "node scripts/migrate.mjs --strict",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@fontsource-variable/schibsted-grotesk": "5.3.0",
+    "@supabase/supabase-js": "2.119.0",
+    "cannon-es": "0.20.0",
+    "next": "16.4.5",
+    "pg": "8.23.1",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "three": "0.187.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "@types/pg": "8.23.1",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@types/three": "0.187.0",
+    "@types/ws": "8.18.2",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3",
+    "vitest": "5.1.0",
+    "ws": "8.22.1"
+  }
+}
