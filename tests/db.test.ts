@@ -3,7 +3,7 @@
  * checks the rules the app relies on (row level security, server-side rolls).
  * Needs RUNA_TEST_DB, e.g. postgres://postgres@127.0.0.1:54322/runa_test_x
  */
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -46,7 +46,8 @@ describe.skipIf(!url)("database rules", () => {
     db = new pg.Client({ connectionString: url });
     await db.connect();
     await db.query(readFileSync(path.join(root, "tests/sql/supabase-stub.sql"), "utf8"));
-    await db.query(readFileSync(path.join(root, "supabase/migrations/0001_runa.sql"), "utf8"));
+    const dir = path.join(root, "supabase/migrations");
+    for (const f of readdirSync(dir).filter((x) => x.endsWith(".sql")).sort()) await db.query(readFileSync(path.join(dir, f), "utf8"));
     for (const [id, meta] of [
       [A, { username: "astrid", display_name: "Astrid" }],
       [B, { username: "bjorn", display_name: "Bjorn" }],

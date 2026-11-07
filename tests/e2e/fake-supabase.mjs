@@ -13,7 +13,7 @@
  * Prints the anon and service keys to use as env vars for the app.
  */
 import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -68,7 +68,8 @@ async function setupDatabase() {
     await c.query(readFileSync(path.join(root, "tests/sql/supabase-stub.sql"), "utf8"));
     await c.query("alter table auth.users add column if not exists password_hash text");
     await c.query("alter table auth.users add column if not exists created_at timestamptz default now()");
-    await c.query(readFileSync(path.join(root, "supabase/migrations/0001_runa.sql"), "utf8"));
+    const dir = path.join(root, "supabase/migrations");
+    for (const f of readdirSync(dir).filter((x) => x.endsWith(".sql")).sort()) await c.query(readFileSync(path.join(dir, f), "utf8"));
     await c.query(`
       create or replace function public._fake_realtime() returns trigger language plpgsql as $$
       begin
