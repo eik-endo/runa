@@ -466,7 +466,7 @@ p {
   position: absolute;
   left: 12px;
   bottom: 12px;
-  max-width: calc(100% - 24px);
+  max-width: calc(100% - 112px);
   display: flex;
   align-items: center;
   gap: 14px;
@@ -564,8 +564,8 @@ p {
 
 .tray-tools {
   position: absolute;
-  top: 8px;
-  right: 8px;
+  bottom: 12px;
+  right: 12px;
   display: flex;
   gap: 4px;
 }

@@ -134,6 +134,28 @@ export class DiceTray {
     this.resizeObs = new ResizeObserver(() => this.layout());
     this.resizeObs.observe(container);
     this.layout();
+    void this.warmUp();
+  }
+
+  /**
+   * Compiles the dice shader before the first throw, so the first roll does not
+   * stall while the GPU driver builds it (noticeable on Windows).
+   */
+  private async warmUp() {
+    try {
+      const { physicalModel } = await import("./models");
+      const model = physicalModel({ type: "std", sides: 20 });
+      if (!model || this.disposed) return;
+      const part = model.parts[0];
+      const probe = new THREE.Mesh(solidGeometry(part.solid), dieMaterial(part, { base: "#b8402f", label: "#f6f1e7" }));
+      probe.position.set(0, -50, 0);
+      probe.castShadow = true;
+      this.scene.add(probe);
+      await this.renderer.compileAsync(this.scene, this.camera);
+      this.scene.remove(probe);
+    } catch {
+      /* warming up is only an optimisation */
+    }
   }
 
   /** Fits camera, walls and light to the container size. */

@@ -211,6 +211,28 @@ function simulateOnce(req: SimRequest, rnd: () => number): Attempt {
 }
 
 /**
+ * Number of frames worth playing: drops the tail where the dice only settle by
+ * fractions of a millimetre, so the result shows as soon as they look still.
+ */
+function stillFrom(frames: number[][]): number {
+  const n = frames[0]?.length ? frames[0].length / 7 : 0;
+  let last = 0;
+  for (let i = 1; i < n; i++) {
+    const a = (i - 1) * 7;
+    const c = i * 7;
+    for (const f of frames) {
+      const dp = Math.abs(f[c] - f[a]) + Math.abs(f[c + 1] - f[a + 1]) + Math.abs(f[c + 2] - f[a + 2]);
+      const dq = Math.abs(f[c + 3] - f[a + 3]) + Math.abs(f[c + 4] - f[a + 4]) + Math.abs(f[c + 5] - f[a + 5]) + Math.abs(f[c + 6] - f[a + 6]);
+      if (dp > 0.004 || dq > 0.003) {
+        last = i;
+        break;
+      }
+    }
+  }
+  return Math.min(n, last + 8);
+}
+
+/**
  * Throws the dice in a physics world and records every frame. The throw is
  * repeated (with new random conditions) when a die ends up cocked on another
  * die or on its rim, so the result is always readable.
@@ -227,11 +249,11 @@ export function simulateThrow(req: SimRequest): SimResult {
     if (good) break;
   }
   const b = best!;
-  const frameCount = b.frames[0]?.length ? b.frames[0].length / 7 : 0;
+  const frameCount = stillFrom(b.frames);
   return {
     fps: SIM_FPS,
     frameCount,
-    frames: b.frames.map((f) => Float32Array.from(f)),
+    frames: b.frames.map((f) => Float32Array.from(f.slice(0, frameCount * 7))),
     landed: b.landed,
     hits: b.hits,
     attempts,
